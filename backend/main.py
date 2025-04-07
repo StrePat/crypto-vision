@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import pandas as pd
@@ -6,7 +6,6 @@ from prophet import Prophet
 
 app = FastAPI()
 
-# Autoriser les requêtes CORS (ici, on autorise toutes les origines pour simplifier)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,37 +14,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def read_root():
+    return {"message": "Backend en ligne !"}
+
 @app.get("/predict")
-def predict():
+def predict(coin: str = Query("ethereum")):
     """
-    Récupère les données historiques d'Ethereum sur 30 jours depuis CoinGecko,
-    entraîne un modèle Prophet et prédit les prix pour les 3 prochains jours.
+    Prédit le prix d'une crypto au choix (par défaut: Ethereum) pour les 3 prochains jours.
     """
-    # Récupération des données de CoinGecko (30 derniers jours)
-    url = "https://api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=usd&days=30"
+    url = f"https://api.coingecko.com/api/v3/coins/{coin}/market_chart?vs_currency=usd&days=30"
     response = requests.get(url)
+
+    if response.status_code != 200:
+        return {"error": f"Impossible de récupérer les données pour {coin}. Vérifie le nom."}
+
     data = response.json()
-    
-    # Construction du DataFrame pour Prophet
+    if "prices" not in data:
+        return {"error": f"Données manquantes pour {coin}."}
+
     df = pd.DataFrame(data["prices"], columns=["timestamp", "price"])
     df["ds"] = pd.to_datetime(df["timestamp"], unit="ms")
     df["y"] = df["price"]
     df = df[["ds", "y"]]
-    
-    # Instanciation et entraînement du modèle Prophet
+
     model = Prophet(daily_seasonality=True)
     model.fit(df)
-    
-    # Création d'un DataFrame futur pour les 3 prochains jours
+
     future = model.make_future_dataframe(periods=3)
     forecast = model.predict(future)
-    
-    # Extraire les prévisions des 3 prochains jours
+
     forecast_data = forecast[["ds", "yhat"]].tail(3)
     result = forecast_data.to_dict(orient="records")
-    
-    return result
 
-if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {
+        "coin": coin,
+        "prediction": result
+    }
